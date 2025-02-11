@@ -1,18 +1,12 @@
 from flask import Flask, render_template, request, jsonify
-from textblob import TextBlob
 import json
+import pandas as pd
+from data_storage import DataStorage
+from spark_processor import SparkProcessor
 
 app = Flask(__name__)
-
-def analyze_sentiment(text):
-    analysis = TextBlob(text)
-    # Determine sentiment
-    if analysis.sentiment.polarity > 0:
-        return 'Positive'
-    elif analysis.sentiment.polarity == 0:
-        return 'Neutral'
-    else:
-        return 'Negative'
+data_storage = DataStorage()
+spark_processor = SparkProcessor()
 
 @app.route('/')
 def home():
@@ -28,36 +22,36 @@ def analyze():
         return jsonify({'error': 'No file selected'})
     
     try:
-        data = json.load(file)
-        results = []
+        # Load and store data
+        reviews = json.load(file)
+        data_storage.store_reviews(reviews)
         
-        for review in data:
-            sentiment = analyze_sentiment(review['Review Title'])
-            results.append({
-                'review': review['Review Title'],
-                'customer': review['Customer name'],
-                'sentiment': sentiment
-            })
+        # Process with Spark
+        results, stats = spark_processor.process_reviews(reviews)
         
-        # Calculate statistics
-        total = len(results)
-        positive = sum(1 for r in results if r['sentiment'] == 'Positive')
-        negative = sum(1 for r in results if r['sentiment'] == 'Negative')
-        neutral = sum(1 for r in results if r['sentiment'] == 'Neutral')
+        # Calculate statistics without Dask
+        total = stats['total']
+        counts = {row['sentiment']: row['count'] for row in stats['counts']}
         
-        stats = {
+        formatted_stats = {
             'total': total,
-            'positive': positive,
-            'negative': negative,
-            'neutral': neutral,
-            'positive_percent': (positive/total)*100,
-            'negative_percent': (negative/total)*100,
-            'neutral_percent': (neutral/total)*100
+            'positive': counts.get('Positive', 0),
+            'negative': counts.get('Negative', 0),
+            'neutral': counts.get('Neutral', 0),
+            'positive_percent': (counts.get('Positive', 0)/total)*100,
+            'negative_percent': (counts.get('Negative', 0)/total)*100,
+            'neutral_percent': (counts.get('Neutral', 0)/total)*100
         }
         
+        formatted_results = [{
+            'review': r['Review Title'],
+            'customer': r['Customer name'],
+            'sentiment': r['sentiment']
+        } for r in results]
+        
         return jsonify({
-            'results': results,
-            'stats': stats
+            'results': formatted_results,
+            'stats': formatted_stats
         })
         
     except Exception as e:
